@@ -38,7 +38,8 @@ def download_single_feed(feed_url: str, archive_dir: str, podcast_name: str):
             safe_title = slugify(raw_title)
 
             filename_base = f"{date_str}-{safe_title}"
-            audio_path = os.path.join(podcast_dir, filename_base + ext)
+            audio_filename = filename_base + ext
+            audio_path = os.path.join(podcast_dir, audio_filename)
             metadata_path = os.path.join(podcast_dir, filename_base + ".json")
 
             if os.path.exists(audio_path) and os.path.exists(metadata_path):
@@ -52,12 +53,17 @@ def download_single_feed(feed_url: str, archive_dir: str, podcast_name: str):
                     for chunk in r.iter_content(chunk_size=8192):
                         f.write(chunk)
 
+            # Update metadata with local info
+            entry["filename"] = audio_filename
+            entry["filesize"] = os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
+            entry["local_url"] = f"/pods/{safe_name}/{audio_filename}"
+
             # Save metadata
             with open(metadata_path, "w") as f:
                 json.dump(entry, f, indent=2)
 
         except Exception as e:
-            print(f"⚠️ Error downloading episode from {audio_url}: {e}")
+            print(f"⚠️ Error downloading episode from {entry.get('title', 'unknown')}: {e}")
 
 
 def download_all_feeds(jsonl_path: str, archive_root: str = "pods"):
