@@ -21,6 +21,27 @@ def download_single_feed(feed_url: str, archive_dir: str, podcast_name: str):
         print(f"⚠️ No entries found in feed: {feed_url}")
         return
 
+    # 📦 Download podcast-level cover image
+    podcast_image_url = (
+        feed.feed.get("image", {}).get("href")
+        or feed.feed.get("itunes_image", {}).get("href")
+    )
+
+    if podcast_image_url:
+        img_ext = os.path.splitext(podcast_image_url.split("?")[0])[1] or ".jpg"
+        img_path = os.path.join(podcast_dir, f"cover{img_ext}")
+        if not os.path.exists(img_path):
+            try:
+                r = requests.get(podcast_image_url, stream=True)
+                r.raise_for_status()
+                with open(img_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                print(f"🖼️  Downloaded cover image: {img_path}")
+            except Exception as e:
+                print(f"⚠️ Failed to download cover image from {podcast_image_url}: {e}")
+
+    # 🎧 Download episodes and per-episode images
     for entry in tqdm(feed.entries, desc=f"  {podcast_name}", unit="episode"):
         try:
             audio_url = entry.enclosures[0].href
@@ -42,6 +63,28 @@ def download_single_feed(feed_url: str, archive_dir: str, podcast_name: str):
             audio_path = os.path.join(podcast_dir, audio_filename)
             metadata_path = os.path.join(podcast_dir, filename_base + ".json")
 
+            # Episode image detection
+            image_url = (
+                entry.get("image", {}).get("href")
+                or entry.get("itunes_image", {}).get("href")
+            )
+            image_filename = None
+            if image_url:
+                img_ext = os.path.splitext(image_url.split("?")[0])[1] or ".jpg"
+                image_filename = filename_base + img_ext
+                image_path = os.path.join(podcast_dir, image_filename)
+
+                if not os.path.exists(image_path):
+                    try:
+                        r = requests.get(image_url, stream=True)
+                        r.raise_for_status()
+                        with open(image_path, "wb") as f:
+                            for chunk in r.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                        print(f"🖼️  Downloaded episode image: {image_path}")
+                    except Exception as e:
+                        print(f"⚠️ Failed to download episode image from {image_url}: {e}")
+
             if os.path.exists(audio_path) and os.path.exists(metadata_path):
                 continue
 
@@ -57,6 +100,8 @@ def download_single_feed(feed_url: str, archive_dir: str, podcast_name: str):
             entry["filename"] = audio_filename
             entry["filesize"] = os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
             entry["local_url"] = f"/pods/{safe_name}/{audio_filename}"
+            if image_filename:
+                entry["image_filename"] = image_filename
 
             # Save metadata
             with open(metadata_path, "w") as f:

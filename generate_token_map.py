@@ -41,10 +41,11 @@ def write_token_map(token_map, output_path=MAP_FILE):
         print(f"📦 Backed up previous map to {backup_file}")
 
     with open(output_path, "w") as f:
-        f.write("# token\t\tpodcast_folder\n")
         for token, folder in token_map.items():
-            f.write(f"{token}\t{folder}\n")
+            f.write(f"{token} {folder};\n")  # <-- proper nginx map format
+
     print(f"✅ Wrote token map to {output_path}")
+
 
 
 def write_reference_json(token_map, archive_root):

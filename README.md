@@ -22,16 +22,35 @@ Create a `feeds.jsonl` file with the following format:
 {"url": "https://pod.url2.com/FFFFF", "name": "Podname ABC"}
 {"url": "https://pod.url3.com/FFFFF", "name": "Podname DEF"}
 ```
+
+### Download podcasts
+
 Next, run the script to download all the missing episodes and metadata.  By default it will be stored under the `pods` directory, with one sub-directory per podcast.
+We recommend if you plan on serving this over the web to use a different directory, such as `/srv/www/petit-pois/pods`.
 
 ``` sh
-python3 download_podcasts.py
+python3 download_podcasts.py \
+  --archive_dir /srv/www/petit-pois/pods
 ```
 
-Next, run the script to generate the feeds:
+### Generate podcast feed tokens (optional)
+
+Again, if you're interested serving, we don't want expose the podcast to just anyone, so we need to create a token for each podcast.  This is done by running the `generate_tokens.py` script:
 
 ``` sh
-python3 generate_feeds.py --base_url http://yourdomain.com/pods
+sudo python3 generate_token_map.py \
+  --archive_dir /srv/www/petit-pois/pods \
+  --map_file /etc/nginx/podcast_tokens.map
+```
+
+### Generate podcast feeds (optional)
+
+Next, run the script to generate the feeds, with the optional inclusion of a token map file:
+
+``` sh
+python3 generate_feeds.py \
+  --archive_dir /srv/www/petit-pois/pods \
+  --base_url http://yourdomain.com/pods
 ```
 
 Now, each podcast will have a `archive.xml` file in its directory.
@@ -62,21 +81,63 @@ Create a config file (e.g., `/etc/nginx/sites-available/petit-pois`):
 
 
 ``` sh
-server {
-    listen 80;
-    server_name archive.example.com;
+map $secure_token $podcast_dir {
+    default "";
+    include /etc/nginx/podcast_tokens.map;
+}
 
-    root /srv/podcast-archive/; # Change to your directory
+server {
+    server_name podcasts.archive.example.com;
+
+    location ~ ^/secure/([^/]+)/(.+)$ {
+    set $secure_token $1;
+    set $filename $2;
+
+    if ($podcast_dir = "") {
+        return 403;
+    }
+
+    # Optional debug logging
+    error_log /var/log/nginx/podcast_debug.log info;
+
+    root /srv/www/petit-pois/pods;
+    try_files /$podcast_dir/$filename =404;
+}
+
+
+    # Optional: deny bare token URLs like /secure/abc123/
+    location ~ ^/secure/([^/]+)/?$ {
+        return 403;
+    }
 
     location /pods/ {
-        autoindex on;  # optional, shows file listings
-        try_files $uri $uri/ =404;
+        deny all;
     }
 
-    location / {
-        return 302 /pods/;
+
+    location = / {
+        deny all;
     }
+
+
+    ###### 🔐 TLS CONFIG (UNCHANGED) ######
+    listen 443 ssl; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/podcasts.archive.example.com/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/podcasts.archive.example.com/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
 }
+
+server {
+    if ($host = podcasts.archive.example.com) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+    listen 80;
+    server_name podcasts.archive.example.com;
+    return 404; # managed by Certbot
+}
+
 ```
 
 Enable the site and restart nginx:
