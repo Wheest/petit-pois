@@ -3,12 +3,37 @@ import json
 import requests
 import feedparser
 import argparse
-from tqdm import tqdm
 import re
+from tqdm import tqdm
+from PIL import Image
 
 
 def slugify(text):
     return re.sub(r"[\W_]+", "-", text.strip().lower())
+
+
+def ensure_itunes_compliant_image(image_path):
+    try:
+        with Image.open(image_path) as img:
+            w, h = img.size
+            needs_resize = w != h or w < 1400 or w > 3000 or img.format != "JPEG"
+
+            if needs_resize:
+                print(f"🔧 Resizing image {image_path} ({w}x{h}) -> 1400x1400 JPEG")
+
+                img = img.convert("RGB")  # remove alpha, force RGB
+                img_resized = img.resize((1400, 1400), Image.LANCZOS)
+
+                new_path = os.path.splitext(image_path)[0] + ".jpg"
+                img_resized.save(new_path, format="JPEG", quality=90)
+
+                if new_path != image_path and os.path.exists(image_path):
+                    os.remove(image_path)
+
+                return new_path
+    except Exception as e:
+        print(f"⚠️ Failed to validate or resize image {image_path}: {e}")
+    return image_path
 
 
 def download_single_feed(feed_url: str, archive_dir: str, podcast_name: str):
@@ -22,10 +47,9 @@ def download_single_feed(feed_url: str, archive_dir: str, podcast_name: str):
         return
 
     # 📦 Download podcast-level cover image
-    podcast_image_url = (
-        feed.feed.get("image", {}).get("href")
-        or feed.feed.get("itunes_image", {}).get("href")
-    )
+    podcast_image_url = feed.feed.get("image", {}).get("href") or feed.feed.get(
+        "itunes_image", {}
+    ).get("href")
 
     if podcast_image_url:
         img_ext = os.path.splitext(podcast_image_url.split("?")[0])[1] or ".jpg"
@@ -41,20 +65,21 @@ def download_single_feed(feed_url: str, archive_dir: str, podcast_name: str):
             except Exception as e:
                 print(f"⚠️ Failed to download cover image from {podcast_image_url}: {e}")
 
+        # 🔧 Resize if needed
+        img_path = ensure_itunes_compliant_image(img_path)
+
     # 🎧 Download episodes and per-episode images
     for entry in tqdm(feed.entries, desc=f"  {podcast_name}", unit="episode"):
         try:
             audio_url = entry.enclosures[0].href
             ext = os.path.splitext(audio_url.split("?")[0])[1] or ".mp3"
 
-            # Date
             pub_date = entry.get("published_parsed")
             if pub_date:
                 date_str = f"{pub_date.tm_year:04d}-{pub_date.tm_mon:02d}-{pub_date.tm_mday:02d}"
             else:
                 date_str = "undated"
 
-            # Safe title
             raw_title = entry.get("title", "untitled")
             safe_title = slugify(raw_title)
 
@@ -64,10 +89,9 @@ def download_single_feed(feed_url: str, archive_dir: str, podcast_name: str):
             metadata_path = os.path.join(podcast_dir, filename_base + ".json")
 
             # Episode image detection
-            image_url = (
-                entry.get("image", {}).get("href")
-                or entry.get("itunes_image", {}).get("href")
-            )
+            image_url = entry.get("image", {}).get("href") or entry.get(
+                "itunes_image", {}
+            ).get("href")
             image_filename = None
             if image_url:
                 img_ext = os.path.splitext(image_url.split("?")[0])[1] or ".jpg"
@@ -83,7 +107,11 @@ def download_single_feed(feed_url: str, archive_dir: str, podcast_name: str):
                                 f.write(chunk)
                         print(f"🖼️  Downloaded episode image: {image_path}")
                     except Exception as e:
-                        print(f"⚠️ Failed to download episode image from {image_url}: {e}")
+                        print(
+                            f"⚠️ Failed to download episode image from {image_url}: {e}"
+                        )
+
+                image_path = ensure_itunes_compliant_image(image_path)
 
             if os.path.exists(audio_path) and os.path.exists(metadata_path):
                 continue
@@ -96,19 +124,22 @@ def download_single_feed(feed_url: str, archive_dir: str, podcast_name: str):
                     for chunk in r.iter_content(chunk_size=8192):
                         f.write(chunk)
 
-            # Update metadata with local info
+            # Update metadata
             entry["filename"] = audio_filename
-            entry["filesize"] = os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
+            entry["filesize"] = (
+                os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
+            )
             entry["local_url"] = f"/pods/{safe_name}/{audio_filename}"
             if image_filename:
-                entry["image_filename"] = image_filename
+                entry["image_filename"] = os.path.basename(image_path)
 
-            # Save metadata
             with open(metadata_path, "w") as f:
                 json.dump(entry, f, indent=2)
 
         except Exception as e:
-            print(f"⚠️ Error downloading episode from {entry.get('title', 'unknown')}: {e}")
+            print(
+                f"⚠️ Error downloading episode from {entry.get('title', 'unknown')}: {e}"
+            )
 
 
 def download_all_feeds(jsonl_path: str, archive_root: str = "pods"):
