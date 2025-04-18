@@ -13,10 +13,17 @@ def slugify(text):
 
 
 def generate_rss_for_podcast(podcast_dir: str, podcast_title: str, base_url: str):
-    rss = ET.Element("rss", version="2.0")
+    base_url = base_url.rstrip("/")  # ensure no trailing slash
+    rss = ET.Element(
+        "rss",
+        version="2.0",
+        attrib={"xmlns:itunes": "http://www.itunes.com/dtds/podcast-1.0.dtd"},
+    )
     channel = ET.SubElement(rss, "channel")
     ET.SubElement(channel, "title").text = podcast_title
-    ET.SubElement(channel, "link").text = f"{base_url}/{os.path.basename(podcast_dir)}"
+    ET.SubElement(
+        channel, "link"
+    ).text = f"{base_url}/pods/{os.path.basename(podcast_dir)}"
     ET.SubElement(channel, "description").text = f"Archived feed for {podcast_title}"
 
     episodes = sorted(
@@ -28,14 +35,6 @@ def generate_rss_for_podcast(podcast_dir: str, podcast_title: str, base_url: str
         with open(json_path) as f:
             entry = json.load(f)
 
-        title = entry.get("title", "Untitled Episode")
-        pub_date = entry.get("published_parsed")
-        if pub_date:
-            pub_date_str = formatdate(datetime(*pub_date[:6]).timestamp())
-        else:
-            pub_date_str = formatdate()
-
-        # Find matching audio file
         base_name = os.path.splitext(json_file)[0]
         audio_file = next(
             (
@@ -46,17 +45,51 @@ def generate_rss_for_podcast(podcast_dir: str, podcast_title: str, base_url: str
             None,
         )
         if not audio_file:
-            continue  # Skip if audio is missing
+            continue
 
-        audio_url = f"{base_url}/{os.path.basename(podcast_dir)}/{audio_file}"
+        title = entry.get("title", "Untitled Episode")
+        pub_date = entry.get("published_parsed")
+        pub_date_str = (
+            formatdate(datetime(*pub_date[:6]).timestamp())
+            if pub_date
+            else formatdate()
+        )
+        description = entry.get("summary") or entry.get("content", [{}])[0].get(
+            "value", ""
+        )
+        subtitle = entry.get("subtitle", "")
+        duration = entry.get("itunes_duration", "")
+        itunes_title = entry.get("itunes_title", title)
+        guid = entry.get("id", audio_file)
+        author = entry.get("author", "")
+
+        audio_path = os.path.join(podcast_dir, audio_file)
+        file_size = os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
+        if not file_size:
+            file_size = int(entry.get("links", [{}])[0].get("length", 0))
+
+        audio_url = f"{base_url}/pods/{os.path.basename(podcast_dir)}/{audio_file}"
 
         item = ET.SubElement(channel, "item")
         ET.SubElement(item, "title").text = title
         ET.SubElement(item, "link").text = audio_url
-        ET.SubElement(item, "enclosure", url=audio_url, type="audio/mpeg")
+        ET.SubElement(
+            item, "enclosure", url=audio_url, type="audio/mpeg", length=str(file_size)
+        )
         ET.SubElement(item, "pubDate").text = pub_date_str
+        ET.SubElement(item, "guid").text = guid
 
-    # Save RSS file
+        if description:
+            ET.SubElement(item, "description").text = description
+        if author:
+            ET.SubElement(item, "author").text = author
+        if subtitle:
+            ET.SubElement(item, "itunes:subtitle").text = subtitle
+        if itunes_title:
+            ET.SubElement(item, "itunes:title").text = itunes_title
+        if duration:
+            ET.SubElement(item, "itunes:duration").text = str(duration)
+
     rss_path = os.path.join(podcast_dir, "archive.xml")
     tree = ET.ElementTree(rss)
     tree.write(rss_path, encoding="utf-8", xml_declaration=True)
